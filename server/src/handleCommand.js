@@ -1,0 +1,136 @@
+const fetch = require('node-fetch');
+const { pool } = require('./db');
+
+const DISCORD_API = 'https://discord.com/api/v10';
+
+// --- Dedup: has this interaction_id already been processed? ---
+async function alreadyProcessed(interactionId) {
+  const result = await pool.query(
+    'SELECT 1 FROM interactions WHERE interaction_id = $1',
+    [interactionId]
+  );
+  return result.rowCount > 0;
+}
+
+// --- Simple rule engine: flag input if it contains configured keywords ---
+async function applyRule(commandName, text) {
+  const configResult = await pool.query(
+    'SELECT flagged_keywords FROM command_config WHERE command_name = $1',
+    [commandName]
+  );
+  const keywords = (configResult.rows[0]?.flagged_keywords || '')
+    .split(',')
+    .map((k) => k.trim().toLowerCase())
+    .filter(Boolean);
+
+  const lowerText = (text || '').toLowerCase();
+  const hit = keywords.find((k) => k && lowerText.includes(k));
+  return hit ? `flagged: matched "${hit}"` : 'ok: no rule matched';
+}
+
+// --- Log the interaction (insert once; dedup guards against re-insert races) ---
+async function logInteraction({ interactionId, commandName, userTag, rawInput, ruleResult, status }) {
+  await pool.query(
+    `INSERT INTO interactions (interaction_id, command_name, user_tag, raw_input, rule_result, status)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (interaction_id) DO NOTHING`,
+    [interactionId, commandName, userTag, rawInput, ruleResult, status]
+  );
+}
+
+async function updateStatus(interactionId, status) {
+  await pool.query('UPDATE interactions SET status = $1 WHERE interaction_id = $2', [status, interactionId]);
+}
+
+// --- Mirror a notification to Slack webhook or Discord channel webhook ---
+async function mirrorNotification(text) {
+  const url = process.env.MIRROR_WEBHOOK_URL;
+  if (!url) return { ok: false, error: 'MIRROR_WEBHOOK_URL not set' };
+
+  // Slack webhooks expect { text }. Discord channel webhooks expect { content }.
+  // Sending both keys is harmless — each platform ignores the field it doesn't use.
+  const body = { text, content: text };
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    return { ok: res.ok, status: res.status };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+// --- Post a follow-up message to the deferred interaction (used when we need >3s) ---
+async function sendFollowup(applicationId, interactionToken, content) {
+  const url = `${DISCORD_API}/webhooks/${applicationId}/${interactionToken}`;
+  await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content }),
+  });
+}
+
+/**
+ * Main entry point: process a slash-command interaction.
+ * Returns the immediate response body to send back to Discord (type 4 = respond now).
+ */
+async function handleSlashCommand(interaction) {
+  const interactionId = interaction.id;
+  const commandName = interaction.data?.name;
+  const userTag = interaction.member?.user?.username || interaction.user?.username || 'unknown';
+  const rawInput = interaction.data?.options?.[0]?.value || '';
+
+  console.log('[handleCommand] incoming interaction', { interactionId, commandName, userTag, rawInput });
+
+  // Dedup guard — this one check we still need before replying, to avoid
+  // double-processing. Keep it fast — it's a single indexed lookup.
+  const alreadyProcessedResult = await alreadyProcessed(interactionId);
+  if (alreadyProcessedResult) {
+    return {
+      type: 4,
+      data: { content: 'Already processed this one — no action taken twice.' },
+    };
+  }
+
+  const ruleResult = await applyRule(commandName, rawInput);
+
+  const response = {
+    type: 4,
+    data: { content: `Got it. Command: /${commandName} -> ${ruleResult}` },
+  };
+
+  // Fire off logging + mirroring WITHOUT awaiting them here — Discord only
+  // waits ~3s for the reply above. Anything slower (webhook calls, extra
+  // queries) happens in the background after we've already answered.
+  (async () => {
+    try {
+      await logInteraction({
+        interactionId,
+        commandName,
+        userTag,
+        rawInput,
+        ruleResult,
+        status: 'processed',
+      });
+
+      const mirrorText = `[${commandName}] from ${userTag}: "${rawInput}" -> ${ruleResult}`;
+      const mirrorResult = await mirrorNotification(mirrorText);
+
+      if (!mirrorResult.ok) {
+        await updateStatus(interactionId, 'processed_mirror_failed');
+      }
+
+      console.log('[handleCommand] background work complete', { interactionId, mirrorResult });
+    } catch (err) {
+      console.error('[handleCommand] background work FAILED', { interactionId, error: err.message });
+    }
+  })();
+
+  console.log('[handleCommand] outgoing response (immediate)', { interactionId, response });
+  return response;
+}
+
+module.exports = { handleSlashCommand, sendFollowup };
