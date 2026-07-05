@@ -99,7 +99,27 @@ async function handleSlashCommand(interaction) {
 
   const response = {
     type: 4,
-    data: { content: `Got it. Command: /${commandName} -> ${ruleResult}` },
+    data: {
+      content: `Got it. Command: /${commandName} -> ${ruleResult}`,
+      // Only show a "Mark Resolved" button on commands where that makes sense.
+      ...(['report', 'escalate'].includes(commandName)
+        ? {
+          components: [
+            {
+              type: 1, // ACTION_ROW
+              components: [
+                {
+                  type: 2, // BUTTON
+                  style: 3, // success (green)
+                  label: 'Mark Resolved',
+                  custom_id: `resolve:${interactionId}`,
+                },
+              ],
+            },
+          ],
+        }
+        : {}),
+    },
   };
 
   // Fire off logging + mirroring WITHOUT awaiting them here — Discord only
@@ -133,4 +153,92 @@ async function handleSlashCommand(interaction) {
   return response;
 }
 
-module.exports = { handleSlashCommand, sendFollowup };
+// --- Handle a button click (interaction type 3) ---
+async function handleButtonClick(interaction) {
+  const customId = interaction.data?.custom_id || '';
+  const [action, interactionId] = customId.split(':');
+
+  console.log('[handleCommand] button clicked', { action, interactionId });
+
+  if (action === 'resolve') {
+    await updateStatus(interactionId, 'resolved');
+
+    // type 7 = UPDATE_MESSAGE — edits the original message in place
+    // instead of sending a new one.
+    return {
+      type: 7,
+      data: {
+        content: `✅ Marked as resolved by ${interaction.member?.user?.username || 'someone'}.`,
+        components: [], // remove the button after it's been used
+      },
+    };
+  }
+
+  return {
+    type: 7,
+    data: { content: 'Unrecognized action.', components: [] },
+  };
+}
+
+// --- Show a modal form (used when a command wants richer input than one option) ---
+function buildFeedbackModal() {
+  return {
+    type: 9, // MODAL
+    data: {
+      custom_id: 'feedback_modal',
+      title: 'Submit Feedback',
+      components: [
+        {
+          type: 1, // ACTION_ROW
+          components: [
+            {
+              type: 4, // TEXT_INPUT
+              custom_id: 'feedback_text',
+              style: 2, // paragraph (multi-line)
+              label: 'What would you like to share?',
+              required: true,
+              max_length: 500,
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+// --- Handle a modal submission (interaction type 5) ---
+async function handleModalSubmit(interaction) {
+  const interactionId = interaction.id;
+  const userTag = interaction.member?.user?.username || interaction.user?.username || 'unknown';
+
+  // Modal submissions nest the input value differently than slash command options.
+  const rawInput = interaction.data?.components?.[0]?.components?.[0]?.value || '';
+  const commandName = 'feedback'; // reuse the existing "feedback" rule config
+
+  console.log('[handleCommand] modal submitted', { interactionId, userTag, rawInput });
+
+  if (await alreadyProcessed(interactionId)) {
+    return { type: 4, data: { content: 'Already processed this one.' } };
+  }
+
+  const ruleResult = await applyRule(commandName, rawInput);
+  const response = {
+    type: 4,
+    data: { content: `Thanks! Feedback logged -> ${ruleResult}` },
+  };
+
+  (async () => {
+    try {
+      await logInteraction({ interactionId, commandName, userTag, rawInput, ruleResult, status: 'processed' });
+      const mirrorText = `[feedback-form] from ${userTag}: "${rawInput}" -> ${ruleResult}`;
+      const mirrorResult = await mirrorNotification(mirrorText);
+      if (!mirrorResult.ok) await updateStatus(interactionId, 'processed_mirror_failed');
+    } catch (err) {
+      console.error('[handleCommand] modal background work FAILED', err.message);
+    }
+  })();
+
+  return response;
+}
+
+module.exports = { handleSlashCommand, sendFollowup, handleButtonClick, buildFeedbackModal, handleModalSubmit };

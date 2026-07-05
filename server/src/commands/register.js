@@ -39,18 +39,6 @@ const commands = [
     ],
   },
   {
-    name: 'feedback',
-    description: 'Share feedback or a suggestion',
-    options: [
-      {
-        name: 'text',
-        description: 'Your feedback',
-        type: 3,
-        required: true,
-      },
-    ],
-  },
-  {
     name: 'escalate',
     description: 'Flag something as urgent — always mirrors to the alert channel',
     options: [
@@ -65,6 +53,10 @@ const commands = [
   {
     name: 'ping',
     description: 'Check if the bot is responsive',
+  },
+  {
+    name: 'feedback-form',
+    description: 'Open a form to submit detailed feedback',
   },
 ];
 

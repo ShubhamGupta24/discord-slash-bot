@@ -25,7 +25,6 @@ async function initDb() {
     ['report', 'urgent,bug,down'],
     ['status', ''],
     ['note', ''],
-    ['feedback', ''],
     ['escalate', 'urgent,critical,down,broken,now'],
     ['ping', ''],
   ];

@@ -4,11 +4,12 @@ const cors = require('cors');
 
 const { initDb, pool } = require('./db');
 const { verifyDiscordRequest } = require('./verifyDiscord');
-const { handleSlashCommand } = require('./handleCommand');
 const { login, requireAuth } = require('./auth');
+const { handleSlashCommand, handleButtonClick, buildFeedbackModal, handleModalSubmit } = require('./handleCommand');
+
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 5000;
 
 // --- CORS: only the React frontend's origin(s) may call this API ---
 const allowedOrigins = (process.env.CLIENT_ORIGIN || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -47,9 +48,13 @@ app.post(
     }
 
     if (interaction.type === 2) {
+      // Special case: this command opens a modal instead of processing immediately.
+      if (interaction.data?.name === 'feedback-form') {
+        return res.json(buildFeedbackModal());
+      }
+
       try {
         const response = await handleSlashCommand(interaction);
-        console.log('[server] interaction response', response);
         return res.json(response);
       } catch (err) {
         console.error('Error handling command:', err);
@@ -57,6 +62,26 @@ app.post(
           type: 4,
           data: { content: 'Something went wrong processing that command.' },
         });
+      }
+    }
+
+    if (interaction.type === 3) {
+      try {
+        const response = await handleButtonClick(interaction);
+        return res.json(response);
+      } catch (err) {
+        console.error('Error handling button click:', err);
+        return res.json({ type: 7, data: { content: 'Something went wrong.', components: [] } });
+      }
+    }
+
+    if (interaction.type === 5) {
+      try {
+        const response = await handleModalSubmit(interaction);
+        return res.json(response);
+      } catch (err) {
+        console.error('Error handling modal submit:', err);
+        return res.json({ type: 4, data: { content: 'Something went wrong processing your feedback.' } });
       }
     }
 
