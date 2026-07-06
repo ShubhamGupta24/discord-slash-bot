@@ -2,8 +2,8 @@
 
 ## Requirement checklist (for reviewers)
 
-- ✅ **Deployed, publicly reachable web app** — Server: `<PASTE_RENDER_URL_HERE>` (Render). Dashboard: `<PASTE_VERCEL_URL_HERE>` (Vercel).
-- ✅ **Discord application/bot with 2+ slash commands** — 7 commands registered: `/report`, `/status`, `/note`, `/feedback`, `/feedback-form`, `/escalate`, `/ping`.
+- ✅ **Deployed, publicly reachable web app** — Server: https://discord-slash-bot-vxnl.onrender.com (Render). Dashboard: https://discord-slash-bot-drab.vercel.app/dashboard (Vercel).
+- ✅ **Discord application/bot with 2+ slash commands** — 7 commands registered: `/report`, `/status`, `/note`, `/feedback-form`, `/escalate`, `/ping`.
 - ✅ **Working interactions endpoint** — `POST /api/interactions`, Ed25519-signature-verified, handles PING (type 1), slash commands (type 2), button clicks (type 3), and modal submissions (type 5).
 - ✅ **Bot writes back** — every command gets an immediate reply in Discord; `/report` and `/escalate` also attach a "Mark Resolved" button.
 - ✅ **Mirrors to a second channel** — every processed command posts a notification to a Discord channel webhook (configurable to a Slack Incoming Webhook instead, via `MIRROR_WEBHOOK_URL`).
